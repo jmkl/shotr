@@ -17,8 +17,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-const TB: i32 = 36; // toolbar height
-const MINW: i32 = 660; // toolbar needs this width
+const TB: i32 = 44; // toolbar height
+const MINW: i32 = 700; // toolbar needs this width
+const PAD: i32 = 8; // padding around the editor (image) area
 const COLORS: [u32; 6] = [
     0xFFE53935, 0xFFFB8C00, 0xFFFDD835, 0xFF43A047, 0xFF1E88E5, 0xFF000000,
 ];
@@ -139,7 +140,7 @@ fn img_rect(e: &Editor) -> RECT {
         left: 0,
         top: TB,
         right: e.ww,
-        bottom: TB + e.h,
+        bottom: TB + e.h + 2 * PAD,
     }
 }
 
@@ -212,35 +213,38 @@ impl Editor {
 
 fn layout() -> Vec<(RECT, Item)> {
     let mut v = vec![];
-    let mut x = 4;
+    let mut x = 8;
     let mut add = |wd: i32, it: Item| {
         v.push((
             RECT {
                 left: x,
-                top: 4,
+                top: 6,
                 right: x + wd,
-                bottom: TB - 4,
+                bottom: TB - 6,
             },
             it,
         ));
-        x += wd + 4;
+        x += wd + 6;
     };
     for t in [Tool::Pen, Tool::Rect, Tool::Arrow, Tool::Text] {
-        add(52, Item::Tool(t));
+        add(60, Item::Tool(t));
     }
     for c in COLORS {
-        add(24, Item::Color(c));
+        add(26, Item::Color(c));
     }
-    add(52, Item::Width);
-    add(52, Item::Undo);
-    add(52, Item::Redo);
-    add(40, Item::Ok);
-    add(40, Item::Cancel);
+    add(62, Item::Width);
+    add(62, Item::Undo);
+    add(62, Item::Redo);
+    add(56, Item::Ok);
+    add(62, Item::Cancel);
     v
 }
 
 fn colorref(c: u32) -> COLORREF {
     COLORREF(((c & 0xFF) << 16) | (c & 0xFF00) | ((c >> 16) & 0xFF))
+}
+fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
+    COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
 }
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
@@ -388,7 +392,7 @@ pub fn open(img: Image, left: i32, top: i32) {
     base.px_mut().copy_from_slice(&img.bgra);
     drop(img);
     unsafe {
-        let ww = w.max(MINW);
+        let ww = (w + 2 * PAD).max(MINW);
         let (vx, vy) = (
             GetSystemMetrics(SM_XVIRTUALSCREEN),
             GetSystemMetrics(SM_YVIRTUALSCREEN),
@@ -399,7 +403,7 @@ pub fn open(img: Image, left: i32, top: i32) {
         );
         // Sit over the selection (toolbar just above it), kept inside the desktop.
         let x = left.min(vx + vw - ww).max(vx);
-        let y = (top - TB).min(vy + vh - (TB + h)).max(vy);
+        let y = (top - TB - PAD).min(vy + vh - (TB + h + 2 * PAD)).max(vy);
         let Ok(hinst) = GetModuleHandleW(None) else {
             return;
         };
@@ -421,7 +425,7 @@ pub fn open(img: Image, left: i32, top: i32) {
             x,
             y,
             ww,
-            TB + h,
+            TB + h + 2 * PAD,
             None,
             None,
             hinst,
@@ -474,10 +478,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                             return a;
                         }
                     }
-                } else if x < e.w {
+                } else if x >= PAD
+                    && x < PAD + e.w
+                    && y >= TB + PAD
+                    && y < TB + PAD + e.h
+                {
                     let p = Pt {
-                        x: x as f32,
-                        y: (y - TB) as f32,
+                        x: (x - PAD) as f32,
+                        y: (y - TB - PAD) as f32,
                     };
                     let (c, wd) = (e.color, e.width());
                     match e.tool {
@@ -512,8 +520,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             with(|e| {
                 if e.drag {
                     let p = Pt {
-                        x: x as f32,
-                        y: (y - TB) as f32,
+                        x: (x - PAD) as f32,
+                        y: (y - TB - PAD) as f32,
                     };
                     match e.cur.as_mut() {
                         Some(Ann::Pen(s)) => s.add(p),
@@ -533,8 +541,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     e.drag = false;
                     let _ = ReleaseCapture();
                     let p = Pt {
-                        x: x as f32,
-                        y: (y - TB) as f32,
+                        x: (x - PAD) as f32,
+                        y: (y - TB - PAD) as f32,
                     };
                     if let Some(mut a) = e.cur.take() {
                         let keep = match &mut a {
@@ -639,85 +647,153 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     LRESULT(0)
 }
 
-unsafe fn paint(hdc: HDC, e: &Editor, dirty: RECT) {
-    if dirty.bottom > TB {
-        // Image: original pixels + vector annotations into the back buffer, then one blit.
-        let _ = BitBlt(e.back.dc, 0, 0, e.w, e.h, e.base.dc, 0, 0, SRCCOPY);
-        let typing = e
-            .text
-            .as_ref()
-            .map(|(p, s)| Ann::Text(*p, format!("{s}|"), e.color, 14.0 + e.width() * 4.0));
-        let items: Vec<&Ann> = e
-            .anns
-            .iter()
-            .chain(e.cur.iter())
-            .chain(typing.iter())
-            .collect();
-        draw_all(e.back.dc, &items);
-        let _ = GdiFlush();
-        let _ = BitBlt(hdc, 0, TB, e.w, e.h, e.back.dc, 0, 0, SRCCOPY);
-        if e.ww > e.w {
-            // toolbar is wider than a narrow image
-            let gap = RECT {
-                left: e.w,
-                top: TB,
-                right: e.ww,
-                bottom: TB + e.h,
-            };
-            FillRect(hdc, &gap, HBRUSH(GetStockObject(DKGRAY_BRUSH).0));
-        }
+unsafe fn paint(hdc: HDC, e: &Editor, _dirty: RECT) {
+    let height = TB + e.h + 2 * PAD;
+    // Full-window off-screen buffer: eliminates flicker during drawing.
+    let memdc = CreateCompatibleDC(hdc);
+    let membmp = CreateCompatibleBitmap(hdc, e.ww, height);
+    let memold = SelectObject(memdc, HGDIOBJ(membmp.0));
+
+    // Background.
+    let bg = CreateSolidBrush(rgb(0x25, 0x25, 0x26));
+    let _ = FillRect(
+        memdc,
+        &RECT {
+            left: 0,
+            top: 0,
+            right: e.ww,
+            bottom: height,
+        },
+        bg,
+    );
+    let _ = DeleteObject(HGDIOBJ(bg.0));
+
+    // Image: original pixels + vector annotations into the back buffer, then one blit.
+    let _ = BitBlt(e.back.dc, 0, 0, e.w, e.h, e.base.dc, 0, 0, SRCCOPY);
+    let typing = e
+        .text
+        .as_ref()
+        .map(|(p, s)| Ann::Text(*p, format!("{s}|"), e.color, 14.0 + e.width() * 4.0));
+    let items: Vec<&Ann> = e
+        .anns
+        .iter()
+        .chain(e.cur.iter())
+        .chain(typing.iter())
+        .collect();
+    draw_all(e.back.dc, &items);
+    let _ = GdiFlush();
+    let _ = BitBlt(memdc, PAD, TB + PAD, e.w, e.h, e.back.dc, 0, 0, SRCCOPY);
+
+    // Border around the editor (image) area.
+    let border = CreateSolidBrush(rgb(0x8A, 0x8A, 0x8A));
+    for i in 0..2 {
+        let r = RECT {
+            left: PAD - 1 - i,
+            top: TB + PAD - 1 - i,
+            right: PAD + e.w + 1 + i,
+            bottom: TB + PAD + e.h + 1 + i,
+        };
+        let _ = FrameRect(memdc, &r, border);
     }
-    if dirty.top < TB {
-        // Toolbar: composed off-screen and blitted once, so it never flickers.
-        let tdc = CreateCompatibleDC(hdc);
-        let tbmp = CreateCompatibleBitmap(hdc, e.ww, TB);
-        let told = SelectObject(tdc, HGDIOBJ(tbmp.0));
-        FillRect(
-            tdc,
-            &RECT {
-                left: 0,
-                top: 0,
-                right: e.ww,
-                bottom: TB,
-            },
-            HBRUSH(GetStockObject(DKGRAY_BRUSH).0),
-        );
-        let font = SelectObject(tdc, GetStockObject(DEFAULT_GUI_FONT));
-        SetBkMode(tdc, TRANSPARENT);
-        for (r, it) in layout() {
-            if let Item::Color(c) = it {
-                let b = CreateSolidBrush(colorref(c));
-                FillRect(tdc, &r, b);
-                if c == e.color {
-                    FrameRect(tdc, &r, HBRUSH(GetStockObject(WHITE_BRUSH).0));
+    let _ = DeleteObject(HGDIOBJ(border.0));
+
+    // Toolbar: composed off-screen and blitted into the window buffer.
+    let tdc = CreateCompatibleDC(hdc);
+    let tbmp = CreateCompatibleBitmap(hdc, e.ww, TB);
+    let told = SelectObject(tdc, HGDIOBJ(tbmp.0));
+    let tb_bg = CreateSolidBrush(rgb(0x25, 0x25, 0x26));
+    let _ = FillRect(
+        tdc,
+        &RECT {
+            left: 0,
+            top: 0,
+            right: e.ww,
+            bottom: TB,
+        },
+        tb_bg,
+    );
+    let _ = DeleteObject(HGDIOBJ(tb_bg.0));
+    // bottom separator line
+    let sep = CreateSolidBrush(rgb(0x3E, 0x3E, 0x42));
+    let _ = FillRect(
+        tdc,
+        &RECT {
+            left: 0,
+            top: TB - 2,
+            right: e.ww,
+            bottom: TB,
+        },
+        sep,
+    );
+    let _ = DeleteObject(HGDIOBJ(sep.0));
+    let font = SelectObject(tdc, GetStockObject(DEFAULT_GUI_FONT));
+    SetBkMode(tdc, TRANSPARENT);
+    for (r, it) in layout() {
+        if let Item::Color(c) = it {
+            let b = CreateSolidBrush(colorref(c));
+            let _ = FillRect(tdc, &r, b);
+            let _ = DeleteObject(HGDIOBJ(b.0));
+            if c == e.color {
+                let wbr = CreateSolidBrush(rgb(0xFF, 0xFF, 0xFF));
+                for i in 0..2 {
+                    let rr = RECT {
+                        left: r.left - i,
+                        top: r.top - i,
+                        right: r.right + i,
+                        bottom: r.bottom + i,
+                    };
+                    let _ = FrameRect(tdc, &rr, wbr);
                 }
-                let _ = DeleteObject(HGDIOBJ(b.0));
+                let _ = DeleteObject(HGDIOBJ(wbr.0));
             } else {
-                let active = it == Item::Tool(e.tool);
-                FillRect(
-                    tdc,
-                    &r,
-                    HBRUSH(GetStockObject(if active { GRAY_BRUSH } else { LTGRAY_BRUSH }).0),
-                );
-                let label = match it {
-                    Item::Tool(Tool::Pen) => "Pen".to_string(),
-                    Item::Tool(Tool::Rect) => "Rect".into(),
-                    Item::Tool(Tool::Arrow) => "Arrow".into(),
-                    Item::Tool(Tool::Text) => "Text".into(),
-                    Item::Width => format!("W {}", e.width() as i32),
-                    Item::Undo => "Undo".into(),
-                    Item::Redo => "Redo".into(),
-                    Item::Ok => "OK".into(),
-                    _ => "X".into(),
-                };
-                SetTextColor(tdc, COLORREF(0));
-                let _ = TextOutW(tdc, r.left + 6, r.top + 5, &wide(&label));
+                let gbr = CreateSolidBrush(rgb(0x50, 0x50, 0x50));
+                let _ = FrameRect(tdc, &r, gbr);
+                let _ = DeleteObject(HGDIOBJ(gbr.0));
             }
+        } else {
+            let active = it == Item::Tool(e.tool);
+            let (bg_rgb, fg_rgb) = match it {
+                Item::Ok => (rgb(0x43, 0xA0, 0x47), rgb(0xFF, 0xFF, 0xFF)),
+                Item::Cancel => (rgb(0x55, 0x55, 0x55), rgb(0xFF, 0xFF, 0xFF)),
+                _ => {
+                    if active {
+                        (rgb(0x00, 0x78, 0xD4), rgb(0xFF, 0xFF, 0xFF))
+                    } else {
+                        (rgb(0x3A, 0x3A, 0x3A), rgb(0xCD, 0xCD, 0xCD))
+                    }
+                }
+            };
+            let bbg = CreateSolidBrush(bg_rgb);
+            let _ = FillRect(tdc, &r, bbg);
+            let _ = DeleteObject(HGDIOBJ(bbg.0));
+            let gbr = CreateSolidBrush(rgb(0x50, 0x50, 0x50));
+            let _ = FrameRect(tdc, &r, gbr);
+            let _ = DeleteObject(HGDIOBJ(gbr.0));
+            let label = match it {
+                Item::Tool(Tool::Pen) => "Pen".to_string(),
+                Item::Tool(Tool::Rect) => "Rect".into(),
+                Item::Tool(Tool::Arrow) => "Arrow".into(),
+                Item::Tool(Tool::Text) => "Text".into(),
+                Item::Width => format!("W {}", e.width() as i32),
+                Item::Undo => "Undo".into(),
+                Item::Redo => "Redo".into(),
+                Item::Ok => "OK".into(),
+                _ => "Cancel".into(),
+            };
+            SetTextColor(tdc, fg_rgb);
+            let _ = TextOutW(tdc, r.left + 8, r.top + 10, &wide(&label));
         }
-        SelectObject(tdc, font);
-        let _ = BitBlt(hdc, 0, 0, e.ww, TB, tdc, 0, 0, SRCCOPY);
-        SelectObject(tdc, told);
-        let _ = DeleteObject(HGDIOBJ(tbmp.0));
-        let _ = DeleteDC(tdc);
     }
+    SelectObject(tdc, font);
+    let _ = BitBlt(memdc, 0, 0, e.ww, TB, tdc, 0, 0, SRCCOPY);
+    SelectObject(tdc, told);
+    let _ = DeleteObject(HGDIOBJ(tbmp.0));
+    let _ = DeleteDC(tdc);
+
+    // Single blit to the screen.
+    let _ = BitBlt(hdc, 0, 0, e.ww, height, memdc, 0, 0, SRCCOPY);
+
+    SelectObject(memdc, memold);
+    let _ = DeleteObject(HGDIOBJ(membmp.0));
+    let _ = DeleteDC(memdc);
 }
