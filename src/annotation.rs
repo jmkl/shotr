@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::Once;
+use std::sync::OnceLock;
 use windows::core::w;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -18,10 +19,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const TB: i32 = 44; // toolbar height
-const MINW: i32 = 700; // toolbar needs this width
+const MINW: i32 = 900; // toolbar needs this width
 const PAD: i32 = 8; // padding around the editor (image) area
-const COLORS: [u32; 6] = [
-    0xFFE53935, 0xFFFB8C00, 0xFFFDD835, 0xFF43A047, 0xFF1E88E5, 0xFF000000,
+const COLORS: [u32; 7] = [
+    0xFFE53935, 0xFFFB8C00, 0xFFFDD835, 0xFF43A047, 0xFF1E88E5, 0xFF000000, 0xFFFFFFFF,
 ];
 const WIDTHS: [f32; 3] = [2.0, 4.0, 8.0];
 const SMOOTHING: f32 = 0.7; // brush stabilizer 0..1, TODO: move to settings
@@ -30,6 +31,7 @@ const SMOOTHING: f32 = 0.7; // brush stabilizer 0..1, TODO: move to settings
 enum Tool {
     Pen,
     Rect,
+    FillRect,
     Arrow,
     Text,
 }
@@ -52,6 +54,7 @@ enum Act {
 enum Ann {
     Pen(PenStroke),
     Rect(Pt, Pt, u32, f32),
+    FillRect(Pt, Pt, u32),
     Arrow(Pt, Pt, u32, f32),
     Text(Pt, String, u32, f32), // f32 = font pixel height
 }
@@ -119,6 +122,7 @@ impl Drop for Dib {
 struct Editor {
     hwnd: HWND,
     base: Dib,
+    committed: Dib,
     back: Dib,
     w: i32,
     h: i32,
@@ -161,7 +165,16 @@ impl Editor {
                 self.anns
                     .push(Ann::Text(p, s, self.color, 14.0 + self.width() * 4.0));
                 self.redo.clear();
+                self.sync_committed();
             }
+        }
+    }
+    fn sync_committed(&mut self) {
+        self.committed.px_mut().copy_from_slice(self.base.px());
+        let items: Vec<&Ann> = self.anns.iter().collect();
+        unsafe {
+            draw_all(self.committed.dc, &items);
+            let _ = GdiFlush();
         }
     }
     fn export(&mut self) -> Option<Image> {
@@ -203,41 +216,46 @@ impl Editor {
         if let Some(a) = self.anns.pop() {
             self.redo.push(a);
         }
+        self.sync_committed();
     }
     fn redo_op(&mut self) {
         if let Some(a) = self.redo.pop() {
             self.anns.push(a);
         }
+        self.sync_committed();
     }
 }
 
-fn layout() -> Vec<(RECT, Item)> {
-    let mut v = vec![];
-    let mut x = 8;
-    let mut add = |wd: i32, it: Item| {
-        v.push((
-            RECT {
-                left: x,
-                top: 6,
-                right: x + wd,
-                bottom: TB - 6,
-            },
-            it,
-        ));
-        x += wd + 6;
-    };
-    for t in [Tool::Pen, Tool::Rect, Tool::Arrow, Tool::Text] {
-        add(60, Item::Tool(t));
-    }
-    for c in COLORS {
-        add(26, Item::Color(c));
-    }
-    add(62, Item::Width);
-    add(62, Item::Undo);
-    add(62, Item::Redo);
-    add(56, Item::Ok);
-    add(62, Item::Cancel);
-    v
+fn layout() -> &'static [(RECT, Item)] {
+    static CACHE: OnceLock<Vec<(RECT, Item)>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let mut v = vec![];
+        let mut x = 8;
+        let mut add = |wd: i32, it: Item| {
+            v.push((
+                RECT {
+                    left: x,
+                    top: 6,
+                    right: x + wd,
+                    bottom: TB - 6,
+                },
+                it,
+            ));
+            x += wd + 6;
+        };
+        for t in [Tool::Pen, Tool::Rect, Tool::FillRect, Tool::Arrow, Tool::Text] {
+            add(60, Item::Tool(t));
+        }
+        for c in COLORS {
+            add(26, Item::Color(c));
+        }
+        add(62, Item::Width);
+        add(62, Item::Undo);
+        add(62, Item::Redo);
+        add(56, Item::Ok);
+        add(62, Item::Cancel);
+        v
+    })
 }
 
 fn colorref(c: u32) -> COLORREF {
@@ -278,6 +296,22 @@ unsafe fn draw_all(hdc: HDC, items: &[&Ann]) {
     gp::GdipSetSmoothingMode(g, gp::SmoothingModeAntiAlias);
     for a in items {
         let (color, width) = match a {
+            Ann::FillRect(p, q, c) => {
+                let mut brush: *mut gp::GpSolidFill = null_mut();
+                let _ = gp::GdipCreateSolidFill(*c, &mut brush);
+                if !brush.is_null() {
+                    let _ = gp::GdipFillRectangle(
+                        g,
+                        brush as *mut gp::GpBrush,
+                        p.x.min(q.x),
+                        p.y.min(q.y),
+                        (p.x - q.x).abs(),
+                        (p.y - q.y).abs(),
+                    );
+                    gp::GdipDeleteBrush(brush as *mut gp::GpBrush);
+                }
+                continue
+            }
             Ann::Pen(s) => {
                 draw_brush(g, s);
                 continue;
@@ -326,6 +360,7 @@ unsafe fn draw_all(hdc: HDC, items: &[&Ann]) {
                 }
             }
             Ann::Text(..) => {}
+            Ann::FillRect(..) => {}
         }
         gp::GdipDeletePen(pen);
     }
@@ -386,10 +421,13 @@ pub fn open(img: Image, left: i32, top: i32) {
     }
     gdiplus_init();
     let (w, h) = (img.w as i32, img.h as i32);
-    let (Some(mut base), Some(back)) = (Dib::new(w, h), Dib::new(w, h)) else {
+    let (Some(mut base), Some(back), Some(mut committed)) =
+        (Dib::new(w, h), Dib::new(w, h), Dib::new(w, h))
+    else {
         return;
     };
     base.px_mut().copy_from_slice(&img.bgra);
+    committed.px_mut().copy_from_slice(&img.bgra);
     drop(img);
     unsafe {
         let ww = (w + 2 * PAD).max(MINW);
@@ -437,6 +475,7 @@ pub fn open(img: Image, left: i32, top: i32) {
             *e.borrow_mut() = Some(Editor {
                 hwnd,
                 base,
+                committed,
                 back,
                 w,
                 h,
@@ -471,7 +510,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let (x, y) = lo_hi(lp);
             with(|e| {
                 if y < TB {
-                    for (r, it) in layout() {
+                    for (r, it) in layout().iter().copied() {
                         if x >= r.left && x < r.right && y >= r.top && y < r.bottom {
                             let a = e.toolbar(it);
                             let _ = InvalidateRect(e.hwnd, None, false);
@@ -495,6 +534,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         }
                         Tool::Rect => {
                             e.cur = Some(Ann::Rect(p, p, c, wd));
+                            e.drag = true;
+                        }
+                        Tool::FillRect => {
+                            e.cur = Some(Ann::FillRect(p, p, c));
                             e.drag = true;
                         }
                         Tool::Arrow => {
@@ -525,7 +568,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     };
                     match e.cur.as_mut() {
                         Some(Ann::Pen(s)) => s.add(p),
-                        Some(Ann::Rect(_, b, ..)) | Some(Ann::Arrow(_, b, ..)) => *b = p,
+                        Some(Ann::Rect(_, b, ..))
+                        | Some(Ann::FillRect(_, b, ..))
+                        | Some(Ann::Arrow(_, b, ..)) => *b = p,
                         _ => {}
                     }
                     let _ = InvalidateRect(e.hwnd, Some(&img_rect(e)), false);
@@ -550,7 +595,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                                 s.finish(p);
                                 true
                             }
-                            Ann::Rect(q, b, ..) | Ann::Arrow(q, b, ..) => {
+                            Ann::Rect(q, b, ..)
+                            | Ann::FillRect(q, b, ..)
+                            | Ann::Arrow(q, b, ..) => {
                                 *b = p;
                                 q.dist2(p) >= 4.0
                             }
@@ -559,6 +606,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         if keep {
                             e.anns.push(a);
                             e.redo.clear();
+                            e.sync_committed();
                         }
                     }
                     let _ = InvalidateRect(e.hwnd, Some(&img_rect(e)), false);
@@ -668,19 +716,22 @@ unsafe fn paint(hdc: HDC, e: &Editor, _dirty: RECT) {
     );
     let _ = DeleteObject(HGDIOBJ(bg.0));
 
-    // Image: original pixels + vector annotations into the back buffer, then one blit.
-    let _ = BitBlt(e.back.dc, 0, 0, e.w, e.h, e.base.dc, 0, 0, SRCCOPY);
+    // Image: committed layer (base + finished annotations) + current stroke/typing.
+    let _ = BitBlt(e.back.dc, 0, 0, e.w, e.h, e.committed.dc, 0, 0, SRCCOPY);
     let typing = e
         .text
         .as_ref()
         .map(|(p, s)| Ann::Text(*p, format!("{s}|"), e.color, 14.0 + e.width() * 4.0));
-    let items: Vec<&Ann> = e
-        .anns
-        .iter()
-        .chain(e.cur.iter())
-        .chain(typing.iter())
-        .collect();
-    draw_all(e.back.dc, &items);
+    let mut extras: Vec<&Ann> = Vec::new();
+    if let Some(cur) = &e.cur {
+        extras.push(cur);
+    }
+    if let Some(t) = &typing {
+        extras.push(t);
+    }
+    if !extras.is_empty() {
+        draw_all(e.back.dc, &extras);
+    }
     let _ = GdiFlush();
     let _ = BitBlt(memdc, PAD, TB + PAD, e.w, e.h, e.back.dc, 0, 0, SRCCOPY);
 
@@ -728,7 +779,7 @@ unsafe fn paint(hdc: HDC, e: &Editor, _dirty: RECT) {
     let _ = DeleteObject(HGDIOBJ(sep.0));
     let font = SelectObject(tdc, GetStockObject(DEFAULT_GUI_FONT));
     SetBkMode(tdc, TRANSPARENT);
-    for (r, it) in layout() {
+    for (r, it) in layout().iter().copied() {
         if let Item::Color(c) = it {
             let b = CreateSolidBrush(colorref(c));
             let _ = FillRect(tdc, &r, b);
@@ -772,6 +823,7 @@ unsafe fn paint(hdc: HDC, e: &Editor, _dirty: RECT) {
             let label = match it {
                 Item::Tool(Tool::Pen) => "Pen".to_string(),
                 Item::Tool(Tool::Rect) => "Rect".into(),
+                Item::Tool(Tool::FillRect) => "Fill".into(),
                 Item::Tool(Tool::Arrow) => "Arrow".into(),
                 Item::Tool(Tool::Text) => "Text".into(),
                 Item::Width => format!("W {}", e.width() as i32),
