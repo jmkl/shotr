@@ -17,6 +17,7 @@ while releasing the mouse to open the annotation editor instead.
   - Undo / Redo, smooth stabilized pen strokes.
   - Live preview, then a single render on **Done**.
 - **System tray** icon with Quit.
+- **Sound feedback** on capture completion (embedded `assets/sound.mp3`).
 - **Per-user install** via `install.nu` (no admin rights, starts at login).
 
 ## Requirements

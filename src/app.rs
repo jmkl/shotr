@@ -5,11 +5,12 @@
 use crate::{clipboard, hotkey, image, selection, storage, tray};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-use windows::core::{w, Result, PCWSTR};
+use windows::core::{w, HSTRING, Result, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::Media::Multimedia::mciSendStringW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub fn show_error(msg: &str) {
@@ -30,6 +31,7 @@ static PENDING: AtomicUsize = AtomicUsize::new(0);
 /// Clipboard + WebP encode + save, off the UI thread. One short-lived thread
 /// per screenshot, so nothing runs while idle.
 pub fn finish(mut img: image::Image) {
+    play_sound();
     PENDING.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
         let _ = clipboard::copy(&img); // a clipboard failure must not block saving
@@ -41,6 +43,27 @@ pub fn finish(mut img: image::Image) {
         }
         PENDING.fetch_sub(1, Ordering::SeqCst);
     });
+}
+
+fn sound_path() -> std::path::PathBuf {
+    let p = std::env::temp_dir().join("shotr_sound.mp3");
+    if !p.exists() {
+        let _ = std::fs::write(&p, include_bytes!("../assets/sound.mp3"));
+    }
+    p
+}
+
+pub fn play_sound() {
+    let path = sound_path();
+    unsafe {
+        let _ = mciSendStringW(&HSTRING::from("close shotr_sound"), None, HWND::default());
+        let open_cmd = HSTRING::from(format!(
+            "open \"{}\" type mpegvideo alias shotr_sound",
+            path.to_string_lossy()
+        ));
+        let _ = mciSendStringW(&open_cmd, None, HWND::default());
+        let _ = mciSendStringW(&HSTRING::from("play shotr_sound"), None, HWND::default());
+    }
 }
 
 pub fn run() -> Result<()> {
