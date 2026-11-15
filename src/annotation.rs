@@ -289,62 +289,82 @@ fn gdiplus_init() {
 /// Draws annotations onto `hdc` (image-pixel coordinates).
 unsafe fn draw_all(hdc: HDC, items: &[&Ann]) {
     let mut g: *mut gp::GpGraphics = null_mut();
-    let _ = gp::GdipCreateFromHDC(hdc, &mut g);
+    let _ = unsafe { gp::GdipCreateFromHDC(hdc, &mut g) };
     if g.is_null() {
         return;
     }
-    gp::GdipSetSmoothingMode(g, gp::SmoothingModeAntiAlias);
+    unsafe {
+        gp::GdipSetSmoothingMode(g, gp::SmoothingModeAntiAlias);
+    }
     for a in items {
         let (color, width) = match a {
             Ann::FillRect(p, q, c) => {
                 let mut brush: *mut gp::GpSolidFill = null_mut();
-                let _ = gp::GdipCreateSolidFill(*c, &mut brush);
+                let _ = unsafe { gp::GdipCreateSolidFill(*c, &mut brush) };
                 if !brush.is_null() {
-                    let _ = gp::GdipFillRectangle(
-                        g,
-                        brush as *mut gp::GpBrush,
-                        p.x.min(q.x),
-                        p.y.min(q.y),
-                        (p.x - q.x).abs(),
-                        (p.y - q.y).abs(),
-                    );
-                    gp::GdipDeleteBrush(brush as *mut gp::GpBrush);
+                    let _ = unsafe {
+                        gp::GdipFillRectangle(
+                            g,
+                            brush as *mut gp::GpBrush,
+                            p.x.min(q.x),
+                            p.y.min(q.y),
+                            (p.x - q.x).abs(),
+                            (p.y - q.y).abs(),
+                        )
+                    };
+                    unsafe {
+                        gp::GdipDeleteBrush(brush as *mut gp::GpBrush);
+                    }
                 }
                 continue
             }
             Ann::Pen(s) => {
-                draw_brush(g, s);
+                unsafe {
+                    draw_brush(g, s);
+                }
                 continue;
             }
             Ann::Rect(_, _, c, w) | Ann::Arrow(_, _, c, w) => (*c, *w),
             Ann::Text(p, s, c, size) => {
-                gp::GdipFlush(g, gp::FlushIntentionSync);
-                text(hdc, *p, s, *c, *size);
+                unsafe {
+                    gp::GdipFlush(g, gp::FlushIntentionSync);
+                }
+                unsafe {
+                    text(hdc, *p, s, *c, *size);
+                }
                 continue;
             }
         };
         let mut pen: *mut gp::GpPen = null_mut();
-        let _ = gp::GdipCreatePen1(color, width, gp::UnitPixel, &mut pen);
+        let _ = unsafe { gp::GdipCreatePen1(color, width, gp::UnitPixel, &mut pen) };
         if pen.is_null() {
             continue;
         }
-        gp::GdipSetPenStartCap(pen, gp::LineCapRound);
-        gp::GdipSetPenEndCap(pen, gp::LineCapRound);
+        unsafe {
+            gp::GdipSetPenStartCap(pen, gp::LineCapRound);
+        }
+        unsafe {
+            gp::GdipSetPenEndCap(pen, gp::LineCapRound);
+        }
         if !matches!(a, Ann::Rect(..)) {
-            gp::GdipSetPenLineJoin(pen, gp::LineJoinRound);
+            unsafe {
+                gp::GdipSetPenLineJoin(pen, gp::LineJoinRound);
+            }
         }
         let pf = |p: Pt| gp::PointF { X: p.x, Y: p.y };
         match a {
             Ann::Pen(_) => {}
             Ann::Rect(p, q, ..) => {
-                gp::GdipDrawRectangle(
-                    g,
-                    pen,
-                    p.x.min(q.x),
-                    p.y.min(q.y),
-                    (p.x - q.x).abs(),
-                    (p.y - q.y).abs(),
-                );
+                unsafe {
+                    gp::GdipDrawRectangle(
+                        g,
+                        pen,
+                        p.x.min(q.x),
+                        p.y.min(q.y),
+                        (p.x - q.x).abs(),
+                        (p.y - q.y).abs(),
+                    );
+                }
             }
             Ann::Arrow(p, q, _, w) => {
                 if p.dist2(*q) >= 4.0 {
@@ -354,23 +374,31 @@ unsafe fn draw_all(hdc: HDC, items: &[&Ann]) {
                         X: q.x - hl * (ang + d).cos(),
                         Y: q.y - hl * (ang + d).sin(),
                     };
-                    gp::GdipDrawLine(g, pen, p.x, p.y, q.x, q.y);
+                    unsafe {
+                        gp::GdipDrawLine(g, pen, p.x, p.y, q.x, q.y);
+                    }
                     let head = [wing(-0.5), pf(*q), wing(0.5)];
-                    gp::GdipDrawLines(g, pen, head.as_ptr(), 3);
+                    unsafe {
+                        gp::GdipDrawLines(g, pen, head.as_ptr(), 3);
+                    }
                 }
             }
             Ann::Text(..) => {}
             Ann::FillRect(..) => {}
         }
-        gp::GdipDeletePen(pen);
+        unsafe {
+            gp::GdipDeletePen(pen);
+        }
     }
-    gp::GdipDeleteGraphics(g);
+    unsafe {
+        gp::GdipDeleteGraphics(g);
+    }
 }
 
 /// Brush stroke = one anti-aliased filled outline + round end caps / click dot.
 unsafe fn draw_brush(g: *mut gp::GpGraphics, s: &PenStroke) {
     let mut fill: *mut gp::GpSolidFill = null_mut();
-    let _ = gp::GdipCreateSolidFill(s.color, &mut fill);
+    let _ = unsafe { gp::GdipCreateSolidFill(s.color, &mut fill) };
     if fill.is_null() {
         return;
     }
@@ -381,38 +409,52 @@ unsafe fn draw_brush(g: *mut gp::GpGraphics, s: &PenStroke) {
             .iter()
             .map(|p| gp::PointF { X: p.x, Y: p.y })
             .collect();
-        gp::GdipFillPolygon(g, br, pts.as_ptr(), pts.len() as i32, gp::FillModeWinding);
+        unsafe {
+            gp::GdipFillPolygon(g, br, pts.as_ptr(), pts.len() as i32, gp::FillModeWinding);
+        }
     }
     for &(c, d) in &s.caps {
-        gp::GdipFillEllipse(g, br, c.x - d / 2.0, c.y - d / 2.0, d, d);
+        unsafe {
+            gp::GdipFillEllipse(g, br, c.x - d / 2.0, c.y - d / 2.0, d, d);
+        }
     }
-    gp::GdipDeleteBrush(br);
+    unsafe {
+        gp::GdipDeleteBrush(br);
+    }
 }
 
 unsafe fn text(hdc: HDC, p: Pt, s: &str, color: u32, size: f32) {
     // charset 1 = DEFAULT_CHARSET, quality 4 = ANTIALIASED_QUALITY
-    let font = CreateFontW(
-        -(size as i32),
-        0,
-        0,
-        0,
-        400,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        4,
-        0,
-        w!("Segoe UI"),
-    );
-    let old = SelectObject(hdc, HGDIOBJ(font.0));
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, colorref(color));
-    let _ = TextOutW(hdc, p.x as i32, p.y as i32, &wide(s));
-    SelectObject(hdc, old);
-    let _ = DeleteObject(HGDIOBJ(font.0));
+    let font = unsafe {
+        CreateFontW(
+            -(size as i32),
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            4,
+            0,
+            w!("Segoe UI"),
+        )
+    };
+    let old = unsafe { SelectObject(hdc, HGDIOBJ(font.0)) };
+    unsafe {
+        SetBkMode(hdc, TRANSPARENT);
+    }
+    unsafe {
+        SetTextColor(hdc, colorref(color));
+    }
+    let _ = unsafe { TextOutW(hdc, p.x as i32, p.y as i32, &wide(s)) };
+    unsafe {
+        SelectObject(hdc, old);
+    }
+    let _ = unsafe { DeleteObject(HGDIOBJ(font.0)) };
 }
 
 pub fn open(img: Image, left: i32, top: i32) {
@@ -498,7 +540,7 @@ pub fn open(img: Image, left: i32, top: i32) {
 
 unsafe fn finish_edit(hwnd: HWND) {
     let img = with(|e| e.export()).flatten();
-    let _ = DestroyWindow(hwnd); // after the borrow ends: WM_DESTROY re-borrows
+    let _ = unsafe { DestroyWindow(hwnd) }; // after the borrow ends: WM_DESTROY re-borrows
     if let Some(img) = img {
         crate::app::finish(img);
     }
@@ -513,7 +555,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     for (r, it) in layout().iter().copied() {
                         if x >= r.left && x < r.right && y >= r.top && y < r.bottom {
                             let a = e.toolbar(it);
-                            let _ = InvalidateRect(e.hwnd, None, false);
+                            let _ = unsafe { InvalidateRect(e.hwnd, None, false) };
                             return a;
                         }
                     }
@@ -550,9 +592,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         }
                     }
                     if e.drag {
-                        SetCapture(e.hwnd);
+                        unsafe {
+                            SetCapture(e.hwnd);
+                        }
                     }
-                    let _ = InvalidateRect(e.hwnd, Some(&img_rect(e)), false);
+                    let _ = unsafe { InvalidateRect(e.hwnd, Some(&img_rect(e)), false) };
                 }
                 Act::None
             })
@@ -573,7 +617,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         | Some(Ann::Arrow(_, b, ..)) => *b = p,
                         _ => {}
                     }
-                    let _ = InvalidateRect(e.hwnd, Some(&img_rect(e)), false);
+                    let _ = unsafe { InvalidateRect(e.hwnd, Some(&img_rect(e)), false) };
                 }
                 Act::None
             })
@@ -584,7 +628,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             with(|e| {
                 if e.drag {
                     e.drag = false;
-                    let _ = ReleaseCapture();
+                    let _ = unsafe { ReleaseCapture() };
                     let p = Pt {
                         x: (x - PAD) as f32,
                         y: (y - TB - PAD) as f32,
@@ -609,7 +653,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                             e.sync_committed();
                         }
                     }
-                    let _ = InvalidateRect(e.hwnd, Some(&img_rect(e)), false);
+                    let _ = unsafe { InvalidateRect(e.hwnd, Some(&img_rect(e)), false) };
                 }
                 Act::None
             })
@@ -634,7 +678,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         }
                         _ => {}
                     }
-                    let _ = InvalidateRect(e.hwnd, Some(&img_rect(e)), false);
+                    let _ = unsafe { InvalidateRect(e.hwnd, Some(&img_rect(e)), false) };
                 }
                 Act::None
             })
@@ -642,8 +686,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_KEYDOWN => {
             let k = wp.0;
-            let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
-            let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
+            let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
+            let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
             with(|e| {
                 let typing = e.text.is_some();
                 let a = if ctrl && !typing && k == VK_Z.0 as usize && !shift {
@@ -662,7 +706,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 } else {
                     Act::None
                 }; // typing: WM_CHAR handles Enter/Esc/Backspace
-                let _ = InvalidateRect(e.hwnd, Some(&img_rect(e)), false);
+                let _ = unsafe { InvalidateRect(e.hwnd, Some(&img_rect(e)), false) };
                 a
             })
             .unwrap_or(Act::None)
@@ -670,25 +714,27 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_ERASEBKGND => return LRESULT(1),
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
-            let hdc = BeginPaint(hwnd, &mut ps);
+            let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
             ED.with(|e| {
                 if let Some(ed) = e.borrow().as_ref() {
-                    paint(hdc, ed, ps.rcPaint);
+                    unsafe {
+                        paint(hdc, ed, ps.rcPaint);
+                    }
                 }
             });
-            let _ = EndPaint(hwnd, &ps);
+            let _ = unsafe { EndPaint(hwnd, &ps) };
             return LRESULT(0);
         }
         WM_DESTROY => {
             ED.with(|e| *e.borrow_mut() = None);
             return LRESULT(0);
         }
-        _ => return DefWindowProcW(hwnd, msg, wp, lp),
+        _ => return unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
     };
     match act {
-        Act::Done => finish_edit(hwnd),
+        Act::Done => unsafe { finish_edit(hwnd) },
         Act::Cancel => {
-            let _ = DestroyWindow(hwnd);
+            let _ = unsafe { DestroyWindow(hwnd) };
         }
         Act::None => {}
     }
@@ -698,26 +744,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 unsafe fn paint(hdc: HDC, e: &Editor, _dirty: RECT) {
     let height = TB + e.h + 2 * PAD;
     // Full-window off-screen buffer: eliminates flicker during drawing.
-    let memdc = CreateCompatibleDC(hdc);
-    let membmp = CreateCompatibleBitmap(hdc, e.ww, height);
-    let memold = SelectObject(memdc, HGDIOBJ(membmp.0));
+    let memdc = unsafe { CreateCompatibleDC(hdc) };
+    let membmp = unsafe { CreateCompatibleBitmap(hdc, e.ww, height) };
+    let memold = unsafe { SelectObject(memdc, HGDIOBJ(membmp.0)) };
 
     // Background.
-    let bg = CreateSolidBrush(rgb(0x25, 0x25, 0x26));
-    let _ = FillRect(
-        memdc,
-        &RECT {
-            left: 0,
-            top: 0,
-            right: e.ww,
-            bottom: height,
-        },
-        bg,
-    );
-    let _ = DeleteObject(HGDIOBJ(bg.0));
+    let bg = unsafe { CreateSolidBrush(rgb(0x25, 0x25, 0x26)) };
+    let _ = unsafe {
+        FillRect(
+            memdc,
+            &RECT {
+                left: 0,
+                top: 0,
+                right: e.ww,
+                bottom: height,
+            },
+            bg,
+        )
+    };
+    let _ = unsafe { DeleteObject(HGDIOBJ(bg.0)) };
 
     // Image: committed layer (base + finished annotations) + current stroke/typing.
-    let _ = BitBlt(e.back.dc, 0, 0, e.w, e.h, e.committed.dc, 0, 0, SRCCOPY);
+    let _ = unsafe { BitBlt(e.back.dc, 0, 0, e.w, e.h, e.committed.dc, 0, 0, SRCCOPY) };
     let typing = e
         .text
         .as_ref()
@@ -730,13 +778,15 @@ unsafe fn paint(hdc: HDC, e: &Editor, _dirty: RECT) {
         extras.push(t);
     }
     if !extras.is_empty() {
-        draw_all(e.back.dc, &extras);
+        unsafe {
+            draw_all(e.back.dc, &extras);
+        }
     }
-    let _ = GdiFlush();
-    let _ = BitBlt(memdc, PAD, TB + PAD, e.w, e.h, e.back.dc, 0, 0, SRCCOPY);
+    let _ = unsafe { GdiFlush() };
+    let _ = unsafe { BitBlt(memdc, PAD, TB + PAD, e.w, e.h, e.back.dc, 0, 0, SRCCOPY) };
 
     // Border around the editor (image) area.
-    let border = CreateSolidBrush(rgb(0x8A, 0x8A, 0x8A));
+    let border = unsafe { CreateSolidBrush(rgb(0x8A, 0x8A, 0x8A)) };
     for i in 0..2 {
         let r = RECT {
             left: PAD - 1 - i,
@@ -744,48 +794,54 @@ unsafe fn paint(hdc: HDC, e: &Editor, _dirty: RECT) {
             right: PAD + e.w + 1 + i,
             bottom: TB + PAD + e.h + 1 + i,
         };
-        let _ = FrameRect(memdc, &r, border);
+        let _ = unsafe { FrameRect(memdc, &r, border) };
     }
-    let _ = DeleteObject(HGDIOBJ(border.0));
+    let _ = unsafe { DeleteObject(HGDIOBJ(border.0)) };
 
     // Toolbar: composed off-screen and blitted into the window buffer.
-    let tdc = CreateCompatibleDC(hdc);
-    let tbmp = CreateCompatibleBitmap(hdc, e.ww, TB);
-    let told = SelectObject(tdc, HGDIOBJ(tbmp.0));
-    let tb_bg = CreateSolidBrush(rgb(0x25, 0x25, 0x26));
-    let _ = FillRect(
-        tdc,
-        &RECT {
-            left: 0,
-            top: 0,
-            right: e.ww,
-            bottom: TB,
-        },
-        tb_bg,
-    );
-    let _ = DeleteObject(HGDIOBJ(tb_bg.0));
+    let tdc = unsafe { CreateCompatibleDC(hdc) };
+    let tbmp = unsafe { CreateCompatibleBitmap(hdc, e.ww, TB) };
+    let told = unsafe { SelectObject(tdc, HGDIOBJ(tbmp.0)) };
+    let tb_bg = unsafe { CreateSolidBrush(rgb(0x25, 0x25, 0x26)) };
+    let _ = unsafe {
+        FillRect(
+            tdc,
+            &RECT {
+                left: 0,
+                top: 0,
+                right: e.ww,
+                bottom: TB,
+            },
+            tb_bg,
+        )
+    };
+    let _ = unsafe { DeleteObject(HGDIOBJ(tb_bg.0)) };
     // bottom separator line
-    let sep = CreateSolidBrush(rgb(0x3E, 0x3E, 0x42));
-    let _ = FillRect(
-        tdc,
-        &RECT {
-            left: 0,
-            top: TB - 2,
-            right: e.ww,
-            bottom: TB,
-        },
-        sep,
-    );
-    let _ = DeleteObject(HGDIOBJ(sep.0));
-    let font = SelectObject(tdc, GetStockObject(DEFAULT_GUI_FONT));
-    SetBkMode(tdc, TRANSPARENT);
+    let sep = unsafe { CreateSolidBrush(rgb(0x3E, 0x3E, 0x42)) };
+    let _ = unsafe {
+        FillRect(
+            tdc,
+            &RECT {
+                left: 0,
+                top: TB - 2,
+                right: e.ww,
+                bottom: TB,
+            },
+            sep,
+        )
+    };
+    let _ = unsafe { DeleteObject(HGDIOBJ(sep.0)) };
+    let font = unsafe { SelectObject(tdc, GetStockObject(DEFAULT_GUI_FONT)) };
+    unsafe {
+        SetBkMode(tdc, TRANSPARENT);
+    }
     for (r, it) in layout().iter().copied() {
         if let Item::Color(c) = it {
-            let b = CreateSolidBrush(colorref(c));
-            let _ = FillRect(tdc, &r, b);
-            let _ = DeleteObject(HGDIOBJ(b.0));
+            let b = unsafe { CreateSolidBrush(colorref(c)) };
+            let _ = unsafe { FillRect(tdc, &r, b) };
+            let _ = unsafe { DeleteObject(HGDIOBJ(b.0)) };
             if c == e.color {
-                let wbr = CreateSolidBrush(rgb(0xFF, 0xFF, 0xFF));
+                let wbr = unsafe { CreateSolidBrush(rgb(0xFF, 0xFF, 0xFF)) };
                 for i in 0..2 {
                     let rr = RECT {
                         left: r.left - i,
@@ -793,13 +849,13 @@ unsafe fn paint(hdc: HDC, e: &Editor, _dirty: RECT) {
                         right: r.right + i,
                         bottom: r.bottom + i,
                     };
-                    let _ = FrameRect(tdc, &rr, wbr);
+                    let _ = unsafe { FrameRect(tdc, &rr, wbr) };
                 }
-                let _ = DeleteObject(HGDIOBJ(wbr.0));
+                let _ = unsafe { DeleteObject(HGDIOBJ(wbr.0)) };
             } else {
-                let gbr = CreateSolidBrush(rgb(0x50, 0x50, 0x50));
-                let _ = FrameRect(tdc, &r, gbr);
-                let _ = DeleteObject(HGDIOBJ(gbr.0));
+                let gbr = unsafe { CreateSolidBrush(rgb(0x50, 0x50, 0x50)) };
+                let _ = unsafe { FrameRect(tdc, &r, gbr) };
+                let _ = unsafe { DeleteObject(HGDIOBJ(gbr.0)) };
             }
         } else {
             let active = it == Item::Tool(e.tool);
@@ -814,12 +870,12 @@ unsafe fn paint(hdc: HDC, e: &Editor, _dirty: RECT) {
                     }
                 }
             };
-            let bbg = CreateSolidBrush(bg_rgb);
-            let _ = FillRect(tdc, &r, bbg);
-            let _ = DeleteObject(HGDIOBJ(bbg.0));
-            let gbr = CreateSolidBrush(rgb(0x50, 0x50, 0x50));
-            let _ = FrameRect(tdc, &r, gbr);
-            let _ = DeleteObject(HGDIOBJ(gbr.0));
+            let bbg = unsafe { CreateSolidBrush(bg_rgb) };
+            let _ = unsafe { FillRect(tdc, &r, bbg) };
+            let _ = unsafe { DeleteObject(HGDIOBJ(bbg.0)) };
+            let gbr = unsafe { CreateSolidBrush(rgb(0x50, 0x50, 0x50)) };
+            let _ = unsafe { FrameRect(tdc, &r, gbr) };
+            let _ = unsafe { DeleteObject(HGDIOBJ(gbr.0)) };
             let label = match it {
                 Item::Tool(Tool::Pen) => "Pen".to_string(),
                 Item::Tool(Tool::Rect) => "Rect".into(),
@@ -832,20 +888,28 @@ unsafe fn paint(hdc: HDC, e: &Editor, _dirty: RECT) {
                 Item::Ok => "OK".into(),
                 _ => "Cancel".into(),
             };
-            SetTextColor(tdc, fg_rgb);
-            let _ = TextOutW(tdc, r.left + 8, r.top + 10, &wide(&label));
+            unsafe {
+                SetTextColor(tdc, fg_rgb);
+            }
+            let _ = unsafe { TextOutW(tdc, r.left + 8, r.top + 10, &wide(&label)) };
         }
     }
-    SelectObject(tdc, font);
-    let _ = BitBlt(memdc, 0, 0, e.ww, TB, tdc, 0, 0, SRCCOPY);
-    SelectObject(tdc, told);
-    let _ = DeleteObject(HGDIOBJ(tbmp.0));
-    let _ = DeleteDC(tdc);
+    unsafe {
+        SelectObject(tdc, font);
+    }
+    let _ = unsafe { BitBlt(memdc, 0, 0, e.ww, TB, tdc, 0, 0, SRCCOPY) };
+    unsafe {
+        SelectObject(tdc, told);
+    }
+    let _ = unsafe { DeleteObject(HGDIOBJ(tbmp.0)) };
+    let _ = unsafe { DeleteDC(tdc) };
 
     // Single blit to the screen.
-    let _ = BitBlt(hdc, 0, 0, e.ww, height, memdc, 0, 0, SRCCOPY);
+    let _ = unsafe { BitBlt(hdc, 0, 0, e.ww, height, memdc, 0, 0, SRCCOPY) };
 
-    SelectObject(memdc, memold);
-    let _ = DeleteObject(HGDIOBJ(membmp.0));
-    let _ = DeleteDC(memdc);
+    unsafe {
+        SelectObject(memdc, memold);
+    }
+    let _ = unsafe { DeleteObject(HGDIOBJ(membmp.0)) };
+    let _ = unsafe { DeleteDC(memdc) };
 }

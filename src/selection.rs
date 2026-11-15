@@ -116,7 +116,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 s.cur = p;
                 s.dragging = true;
             }
-            SetCapture(hwnd);
+            unsafe {
+                SetCapture(hwnd);
+            }
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
@@ -136,7 +138,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 right: old.right.max(new.right) + 120,
                 bottom: old.bottom.max(new.bottom) + 40,
             };
-            let _ = InvalidateRect(hwnd, Some(&r), false);
+            let _ = unsafe { InvalidateRect(hwnd, Some(&r), false) };
             LRESULT(0)
         }
         WM_LBUTTONUP => {
@@ -154,81 +156,85 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     Some(r)
                 }
             };
-            let _ = ReleaseCapture();
+            let _ = unsafe { ReleaseCapture() };
             if let Some(r) = done {
                 let img = FRAME.with(|f| f.borrow().as_ref().and_then(|fr| fr.crop(r)));
                 if let Some(img) = img {
                     // Shift held on release = open the annotation editor.
-                    if GetKeyState(VK_SHIFT.0 as i32) < 0 {
+                    if unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0 {
                         crate::annotation::open(img, r.left, r.top);
                     } else {
                         crate::app::finish(img);
                     }
                 }
             }
-            let _ = DestroyWindow(hwnd);
+            let _ = unsafe { DestroyWindow(hwnd) };
             LRESULT(0)
         }
         WM_KEYDOWN if wp.0 == VK_ESCAPE.0 as usize => {
-            let _ = DestroyWindow(hwnd);
+            let _ = unsafe { DestroyWindow(hwnd) };
             LRESULT(0)
         }
         WM_RBUTTONDOWN => {
-            let _ = DestroyWindow(hwnd);
+            let _ = unsafe { DestroyWindow(hwnd) };
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
-            let hdc = BeginPaint(hwnd, &mut ps);
+            let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
             let r = ps.rcPaint;
             let (w, h) = (r.right - r.left, r.bottom - r.top);
             if w > 0 && h > 0 {
                 // Double-buffer just the dirty rect.
-                let mem = CreateCompatibleDC(hdc);
-                let bmp = CreateCompatibleBitmap(hdc, w, h);
-                let old = SelectObject(mem, HGDIOBJ(bmp.0));
-                let _ = SetViewportOrgEx(mem, -r.left, -r.top, None);
+                let mem = unsafe { CreateCompatibleDC(hdc) };
+                let bmp = unsafe { CreateCompatibleBitmap(hdc, w, h) };
+                let old = unsafe { SelectObject(mem, HGDIOBJ(bmp.0)) };
+                let _ = unsafe { SetViewportOrgEx(mem, -r.left, -r.top, None) };
                 let (dragging, sel) = {
                     let s = st();
                     (s.dragging, norm(s.origin, s.cur))
                 };
                 FRAME.with(|f| {
                     if let Some(fr) = f.borrow().as_ref() {
-                        let _ = BitBlt(mem, r.left, r.top, w, h, fr.dc, r.left, r.top, SRCCOPY);
+                        let _ = unsafe { BitBlt(mem, r.left, r.top, w, h, fr.dc, r.left, r.top, SRCCOPY) };
                         // Dim: alpha-blend a 1x1 black bitmap stretched over the dirty rect.
-                        let dim = CreateCompatibleDC(hdc);
-                        let db = CreateCompatibleBitmap(hdc, 1, 1);
-                        let dold = SelectObject(dim, HGDIOBJ(db.0));
-                        let _ = PatBlt(dim, 0, 0, 1, 1, BLACKNESS);
+                        let dim = unsafe { CreateCompatibleDC(hdc) };
+                        let db = unsafe { CreateCompatibleBitmap(hdc, 1, 1) };
+                        let dold = unsafe { SelectObject(dim, HGDIOBJ(db.0)) };
+                        let _ = unsafe { PatBlt(dim, 0, 0, 1, 1, BLACKNESS) };
                         let bf = BLENDFUNCTION {
                             BlendOp: AC_SRC_OVER as u8,
                             BlendFlags: 0,
                             SourceConstantAlpha: 140,
                             AlphaFormat: 0,
                         };
-                        let _ = AlphaBlend(mem, r.left, r.top, w, h, dim, 0, 0, 1, 1, bf);
-                        SelectObject(dim, dold);
-                        let _ = DeleteObject(HGDIOBJ(db.0));
-                        let _ = DeleteDC(dim);
+                        let _ = unsafe { AlphaBlend(mem, r.left, r.top, w, h, dim, 0, 0, 1, 1, bf) };
+                        unsafe { SelectObject(dim, dold) };
+                        let _ = unsafe { DeleteObject(HGDIOBJ(db.0)) };
+                        let _ = unsafe { DeleteDC(dim) };
                         if dragging {
                             // selection shown undimmed
-                            let _ = BitBlt(
-                                mem,
-                                sel.left,
-                                sel.top,
-                                sel.right - sel.left,
-                                sel.bottom - sel.top,
-                                fr.dc,
-                                sel.left,
-                                sel.top,
-                                SRCCOPY,
-                            );
+                            let _ = unsafe {
+                                BitBlt(
+                                    mem,
+                                    sel.left,
+                                    sel.top,
+                                    sel.right - sel.left,
+                                    sel.bottom - sel.top,
+                                    fr.dc,
+                                    sel.left,
+                                    sel.top,
+                                    SRCCOPY,
+                                )
+                            };
                         }
                     }
                 });
                 if dragging {
-                    FrameRect(mem, &sel, HBRUSH(GetStockObject(WHITE_BRUSH).0));
+                    unsafe {
+                        FrameRect(mem, &sel, HBRUSH(GetStockObject(WHITE_BRUSH).0));
+                    }
                     let label: Vec<u16> = format!(
                         "{} x {} | Press shift to anotate",
                         sel.right - sel.left,
@@ -236,16 +242,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     )
                     .encode_utf16()
                     .collect();
-                    SetBkMode(mem, TRANSPARENT);
-                    SetTextColor(mem, COLORREF(0x00FFFFFF));
-                    let _ = TextOutW(mem, sel.left, sel.bottom + 6, &label);
+                    unsafe {
+                        SetBkMode(mem, TRANSPARENT);
+                    }
+                    unsafe {
+                        SetTextColor(mem, COLORREF(0x00FFFFFF));
+                    }
+                    let _ = unsafe { TextOutW(mem, sel.left, sel.bottom + 6, &label) };
                 }
-                let _ = BitBlt(hdc, r.left, r.top, w, h, mem, r.left, r.top, SRCCOPY);
-                SelectObject(mem, old);
-                let _ = DeleteObject(HGDIOBJ(bmp.0));
-                let _ = DeleteDC(mem);
+                let _ = unsafe { BitBlt(hdc, r.left, r.top, w, h, mem, r.left, r.top, SRCCOPY) };
+                unsafe {
+                    SelectObject(mem, old);
+                }
+                let _ = unsafe { DeleteObject(HGDIOBJ(bmp.0)) };
+                let _ = unsafe { DeleteDC(mem) };
             }
-            let _ = EndPaint(hwnd, &ps);
+            let _ = unsafe { EndPaint(hwnd, &ps) };
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -253,6 +265,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             OPEN.store(false, Ordering::SeqCst);
             LRESULT(0)
         }
-        _ => DefWindowProcW(hwnd, msg, wp, lp),
+        _ => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
     }
 }

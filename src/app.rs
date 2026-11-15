@@ -133,7 +133,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         tray::WM_TRAY => {
             if lp.0 as u32 == WM_RBUTTONUP {
                 if tray::show_menu(hwnd) == tray::CMD_QUIT {
-                    let _ = DestroyWindow(hwnd);
+                    let _ = unsafe { DestroyWindow(hwnd) };
                 }
             }
             LRESULT(0)
@@ -148,9 +148,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             hotkey::unregister(hwnd);
             tray::remove(hwnd);
-            PostQuitMessage(0);
+            unsafe {
+                PostQuitMessage(0);
+            }
             LRESULT(0)
         }
-        _ => DefWindowProcW(hwnd, msg, wp, lp),
+        _ => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
     }
 }
